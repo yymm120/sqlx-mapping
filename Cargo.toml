@@ -1,0 +1,38 @@
+[package]
+name = "sqlx-mapping"
+version = "0.1.0"
+edition = "2024"
+authors = ["allen<1208401731@qq.com>"]
+description = "A tool for automatically generating Rust structs and CRUD functions from PostgreSQL tables"
+license = "MIT"
+repository = "https://github.com/yymm120/any-creator"
+
+
+[dependencies]
+Inflector = "0.11.4"
+anyhow = "1.0.98"
+bigdecimal = { version = "0.4.8", features = ["serde"] }
+chrono = { version = "0.4.41", features = ["serde"] }
+clap = { version = "4.5.43", features = ["derive", "env", "wrap_help", "color", "error-context"] }
+quote = "1.0.40"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.142"
+sqlx = { version = "0.8.6", features = [ "runtime-tokio-rustls", "postgres", "macros", "derive", "bigdecimal", "chrono" ] }
+syn = { version = "2.0.104", features = ["extra-traits", "full"] }
+tokio = { version = "1.47.1", features = ["full"] }
+toml_edit = "0.23.3"
+uuid = { version = "1.17.0", features = ["serde"] }
+proc-macro2 = {  version = "1.0.95", features = ["span-locations"] }
+toml = "0.9.5"
+prettyplease = "0.2.36"
+regex = "1.11.1"
+futures = "0.3.31"
+#sqlx-stm = {path = "../sqlx-stm"}
+indoc = "2"
+
+[dev-dependencies]
+tempfile = "3.0"
+
+
+#[type_mappings]
+
