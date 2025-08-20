@@ -13,6 +13,7 @@ pub mod cli;
 pub mod codegen;
 pub mod config;
 mod watch;
+mod executor;
 // mod model;
 
 

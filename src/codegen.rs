@@ -396,9 +396,8 @@ fn generate_col_enum(table: &TableInfo) -> ItemEnum {
 }
 
 fn generate_use_deps(options: &Options, table: &TableInfo) -> Vec<ItemUse> {
-  let Options { mod_dir, mod_file, create, update, delete, retrieve, crud, model } = options;
+  let Options { mod_dir, mod_file, create, update, delete, retrieve, crud, model, .. } = options;
   let p = mod_dir.display().to_string();
-  println!("p: {:#?}", &p);
   table.foreign_key
     .iter()
     .unique_by(|t| t.target_table.clone())
@@ -409,11 +408,28 @@ fn generate_use_deps(options: &Options, table: &TableInfo) -> Vec<ItemUse> {
       let table_name_ident = Ident::new(&table_name_snake, proc_macro2::Span::call_site());
 
       let struct_name_ident = if *model {Ident::new(struct_name, proc_macro2::Span::call_site()).to_token_stream()} else {TokenStream::new()};
-      let create_ident = if *create {Ident::new(&format!("{}ForCreate", struct_name), proc_macro2::Span::call_site()).to_token_stream()} else {TokenStream::new()};
-      let update_ident = if *update {Ident::new(&format!("{}ForUpdate", struct_name), proc_macro2::Span::call_site()).to_token_stream()} else {TokenStream::new()};
+
+      let mut extend_deps = TokenStream::new();
+      if *create && *update {
+        let create_ident = Ident::new(&format!("{}ForCreate", struct_name), proc_macro2::Span::call_site()).to_token_stream();
+        let update_ident = Ident::new(&format!("{}ForUpdate", struct_name), proc_macro2::Span::call_site()).to_token_stream();
+        extend_deps = parse_quote! {
+          #table_name_ident::{#struct_name_ident, #create_ident, #update_ident}
+        }
+      } else if *create {
+        let create_ident = Ident::new(&format!("{}ForCreate", struct_name), proc_macro2::Span::call_site()).to_token_stream();
+        extend_deps = parse_quote! {
+          #table_name_ident::{#struct_name_ident, #create_ident}
+        }
+      } else if *update {
+        let update_ident = Ident::new(&format!("{}ForUpdate", struct_name), proc_macro2::Span::call_site()).to_token_stream();
+        extend_deps = parse_quote! {
+          #table_name_ident::{#struct_name_ident, #update_ident}
+        }
+      }
 
       parse_quote! {
-                use crate::model::pg::{#table_name_ident, #table_name_ident::{#struct_name_ident, #create_ident, #update_ident}};
+                use crate::model::pg::{#table_name_ident, #extend_deps};
             }
     })
     .collect()
@@ -1373,6 +1389,7 @@ pub async fn update_model_ast(
 ) -> anyhow::Result<()> {
   let Options { mod_dir, create, update, delete, retrieve, crud, model, .. } = options;
   let table_info = &table_info;
+  let _ = gen_items_if_not_exist(&mut file.ast, options, table_info);
   for item in &mut file.ast.items {
     match item {
       Item::Enum(item_enum) => {
@@ -1447,6 +1464,158 @@ pub async fn update_model_ast(
   tokio::fs::write(path, prettyplease::unparse(&file.ast)).await?;
   Ok(())
 }
+
+fn gen_items_if_not_exist(file: &mut File, options: &Options, table_info: &TableInfo) -> HashMap<String, String>{
+  let mut last_gen = Vec::new();
+  for attr in file.attrs.iter() {
+    if let Meta::NameValue(MetaNameValue {value: Expr::Lit(ExprLit {lit: Lit::Str(str), ..}), ..}) = &attr.meta {
+      let token = str.to_token_stream().to_string().replace(" ", "").replace("\"", "");
+      last_gen = token.split(",").into_iter().map(|t| t.to_string()).collect::<Vec<String>>()
+    }
+  }
+  let Options { mod_dir, mod_file, create, update, delete, retrieve, crud, model, db_url } = options;
+  let mut op = HashMap::new();
+
+  if last_gen.contains(&"model".to_string()) {
+    if !*model {
+      op.insert("m".into(), "delete".into());
+    }
+  }
+  if last_gen.contains(&"create".to_string()) {
+    if !*create {
+      op.insert("c".into(), "delete".into());
+    }
+  }
+
+  if last_gen.contains(&"retrieve".to_string()) {
+    if !*retrieve {
+      op.insert("r".into(), "delete".into());
+    }
+  }
+  if last_gen.contains(&"update".to_string()) {
+    if !*update {
+      op.insert("u".into(), "delete".into());
+    }
+  }
+  if last_gen.contains(&"delete".to_string()) {
+    if !*delete {
+      op.insert("d".into(), "delete".into());
+    }
+  }
+  if *model {
+    if !last_gen.contains(&"model".to_string()) {
+      op.insert("m".into(), "create".into());
+    }
+  }
+  if *create {
+    if !last_gen.contains(&"create".to_string()) {
+      op.insert("c".into(), "create".into());
+    }
+  }
+  if *retrieve {
+    if !last_gen.contains(&"retrieve".to_string()) {
+      op.insert("r".into(), "create".into());
+    }
+  }
+  if *update {
+    if !last_gen.contains(&"update".to_string()) {
+      op.insert("u".into(), "create".into());
+    }
+  }
+  if *delete {
+    if !last_gen.contains(&"delete".to_string()) {
+      op.insert("d".into(), "create".into());
+    }
+  }
+
+
+  let mut di_s = Vec::new();
+  for (i, item) in file.items.iter_mut().enumerate() {
+    match item {
+      Item::Enum(tm) => {
+        let name = tm.ident.to_token_stream().to_string();
+        if name == "Col" && op.get("c").unwrap_or(&"".to_string()) == "delete" {
+          di_s.push(i);
+        }
+      }
+      Item::Fn(tm) => {
+        let name = tm.sig.ident.to_token_stream().to_string();
+        if name.starts_with("insert") && op.get("c").unwrap_or(&"".to_string()) == "delete" {
+          di_s.push(i);
+        }
+        if name.starts_with("update") && op.get("u").unwrap_or(&"".to_string()) == "delete" {
+          di_s.push(i);
+        }
+        if name.starts_with("retrieve") && op.get("r").unwrap_or(&"".to_string()) == "delete" {
+          di_s.push(i);
+        }
+        if name.starts_with("delete") && op.get("d").unwrap_or(&"".to_string()) == "delete" {
+          di_s.push(i);
+        }
+        if name.starts_with("model") && op.get("m").unwrap_or(&"".to_string()) == "delete" {
+          di_s.push(i);
+        }
+      }
+      Item::Struct(tm) => {
+        let name = tm.ident.to_token_stream().to_string();
+        if name.ends_with("ForCreate") && op.get("c").unwrap_or(&"".to_string()) == "delete" {
+          di_s.push(i);
+        }
+        if name.ends_with("ForUpdate") && op.get("u").unwrap_or(&"".to_string()) == "delete" {
+          di_s.push(i);
+        }
+
+        if name == table_info.table_name.to_pascal_case() && op.get("m").unwrap_or(&"".to_string()) == "delete" {
+          di_s.push(i);
+        }
+      }
+      _ => {}
+    }
+  }
+
+  if op.get("m").unwrap_or(&"".to_string()) == "create"  {
+    let item = Item::Struct(generate_struct(table_info, &StructEnum::Stm));
+    file.items.push(item);
+  }
+  if op.get("c").unwrap_or(&"".to_string()) == "create"  {
+    let item = Item::Struct(generate_struct(table_info, &StructEnum::Create));
+    file.items.push(item);
+    let item = Item::Fn(generate_insert_function(table_info));
+    file.items.push(item);
+  }
+  if op.get("r").unwrap_or(&"".to_string()) == "create"  {
+    let mut item = generate_retrieve_functions(table_info);
+    match item {
+      Ok(items) => {
+        let mut items = items.into_iter().map(|tm| Item::Fn(tm)).collect::<Vec<_>>();
+        file.items.append(&mut items);
+      }
+      Err(e) => {
+        println!("{:#?}", e);
+      }
+    }
+  }
+  if op.get("u").unwrap_or(&"".to_string()) == "create"  {
+    let item = Item::Struct(generate_struct(table_info, &StructEnum::Update));
+    file.items.push(item);
+    let item = generate_update_function(table_info, SafeOp::IgnoreNone);
+    match item {
+      Ok(tm) => {file.items.push(Item::Fn(tm));}
+      Err(e) => {println!("{:#?}", e)}
+    }
+    let item = generate_update_function(table_info, SafeOp::AcceptNone);
+    match item {
+      Ok(tm) => {file.items.push(Item::Fn(tm));}
+      Err(e) => {println!("{:#?}", e)}
+    }
+  }
+  if op.get("d").unwrap_or(&"".to_string()) == "create"  {
+    let item = generate_delete_function(table_info);
+    file.items.push(Item::Fn(item));
+  }
+  op
+}
+
 
 
 
@@ -1528,8 +1697,31 @@ pub async fn gen_model_file(options: &Options, table: &TableInfo) -> anyhow::Res
   let Options { mod_dir,create, update, delete, retrieve, crud, model, .. } = options;
   let mut use_items: Vec<_> = generate_use_deps(options, &table);
 
-  let col_enum = if *create {generate_col_enum(&table).to_token_stream()} else {TokenStream::new()};
-  let table_struct = if *model {generate_struct(&table, &StructEnum::Stm).to_token_stream()} else {TokenStream::new()};
+  let mut comment = String::new();
+  if *crud {
+    comment.push_str("Model, Create, Retrieve, Update, Delete");
+  } else {
+    if *model {
+      comment.push_str("Model, ")
+    }
+    if *create {
+      comment.push_str("Create, ")
+    }
+    if *retrieve {
+      comment.push_str("Retrieve, ")
+    }
+    if *update {
+      comment.push_str("Update, ")
+    }
+    if *delete {
+      comment.push_str("Delete, ")
+    }
+  }
+
+  let col_enum = if *create {
+    generate_col_enum(&table).to_token_stream()} else {TokenStream::new()};
+  let table_struct = if *model {
+    generate_struct(&table, &StructEnum::Stm).to_token_stream()} else {TokenStream::new()};
   let create_struct = if *create {generate_struct(&table, &StructEnum::Create).to_token_stream()} else {TokenStream::new()};
   let update_struct = if *update {generate_struct(&table, &StructEnum::Update).to_token_stream()} else {TokenStream::new()};
   let insert_fn = if *create {generate_insert_function(&table).to_token_stream()} else {TokenStream::new()};
@@ -1544,7 +1736,10 @@ pub async fn gen_model_file(options: &Options, table: &TableInfo) -> anyhow::Res
   let delete_fn = if *delete {generate_delete_function(&table).to_token_stream()} else {TokenStream::new()};
   let retrieve_fns = if *retrieve {generate_retrieve_functions(&table)?} else {Vec::new()};
 
+
+
   let file: File = parse_quote! {
+          #![doc = #comment]
 
           use serde::{Deserialize, Serialize};
           use sqlx::{Executor, FromRow, PgPool, Postgres};
@@ -1716,7 +1911,6 @@ pub async fn update_mod_rs(
 }
 
 use tokio::io::AsyncWriteExt;
-use crate::watch::SQLX_MAPPING_CHANGES;
 
 pub async fn create_nested_mod_files(path: &Path) -> anyhow::Result<()> {
   tokio::fs::create_dir_all(path).await?;
@@ -1748,6 +1942,7 @@ pub async fn create_nested_mod_files(path: &Path) -> anyhow::Result<()> {
 
   Ok(())
 }
+#[derive(Clone, Debug)]
 pub struct Options {
   pub mod_dir: PathBuf,
   pub mod_file: PathBuf,
@@ -1757,6 +1952,7 @@ pub struct Options {
   pub retrieve: bool,
   pub crud: bool,
   pub model: bool,
+  pub db_url: String,
 }
 
 

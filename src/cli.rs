@@ -1,3 +1,4 @@
+use std::io;
 use crate::codegen::{ModItemAttr, Options, process_ast, process_ast_update, process_gen, scan, update_mod_rs, create_mod_rs_if_not_exists, sqlx_mapping_init};
 use anyhow::{Context, Result };
 use clap::Parser;
@@ -91,9 +92,23 @@ pub async fn run() -> anyhow::Result<()> {
                 retrieve: crud || r,
                 crud,
                 model: crud || c || u || d || r || m,
+                db_url: db_url.clone(),
             };
 
             let pool = connect_db(db_url).await;
+
+            if w {
+                let mut stdout = io::stdout();
+                match crate::watch::run(&mut stdout, options.clone()).await {
+                    Ok(status) => {
+                        match status { '1' => {} _ => {} }
+                    }
+                    Err(e) => {
+                        println!("{:#?}", e);
+                        println!("{:#?}", e);
+                    }
+                }
+            }
 
             if crud || m || c || r || u || d {
                 let res = sqlx_mapping_init(&pool).await;
@@ -139,24 +154,11 @@ pub async fn run() -> anyhow::Result<()> {
                         process_gen(&options, &rest_tables),
                     );
 
+                // TODO: 冗余代码, 但可能有用
                 if crud {
-
-                    // tokio::join!(
-                    //     update_mod_rs(&options, mod_mappings, mod_file, &rest_tables, &temp),
-                    //     process_ast(&options, in_file_tables),
-                    //     process_ast_update(&options, in_file_old_tables),
-                    //     process_gen(&options, &rest_tables),
-                    // );
 
                 } else {
                     if m {
-                        println!("rest tables: {:#?}",&rest_tables);
-                        // println!("mod_mappings: {:#?}",&mod_mappings);
-                        //
-                        // tokio::join!(
-                        //     update_mod_rs(&options, mod_mappings, mod_file, &rest_tables, &temp ),
-                        // );
-                        //
                     }
                     if c {}
                     if r {}

@@ -9,6 +9,12 @@
 
 > Only support Postgres
 
+Unstable!
+Unstable!
+Unstable!
+
+**The tool is currently unstable**
+
 ## 🚀 Features
 
 | Feature                    | Description                          |
