@@ -30,7 +30,7 @@ cargo install sqlx-mapping
 # 1. Set connection (or use --db parameter)
 export DATABASE_URL="postgresql://user:password@localhost:5432/db_name"
 
-sqlx-mapping map --output examples/model/pg --crud
+sqlx-mapping map --output examples/model/pg -m
 ```
 
 ## 📜 Command Reference
@@ -41,7 +41,7 @@ USAGE:
 
 OPTIONS:
 
-        --crud         Generate all simple CRUD operations (default)
+        --crud         Generate all simple CRUD operations 
 
         --db           postgresql://user:pass@localhost:5432/db_name
 ```
