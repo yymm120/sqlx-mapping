@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>✨ Creator-Sqlx ✨</h1>
+  <h1>✨ sqlx-mapping ✨</h1>
   <p>PostgreSQL 到 Rust 代码生成器</p>
 
 [![Crates.io](https://img.shields.io/crates/v/creator-sqlx?style=for-the-badge&logo=rust)](https://crates.io/crates/creator-sqlx)

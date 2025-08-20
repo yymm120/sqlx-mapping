@@ -1,42 +1,68 @@
-use crate::codegen::{
-    ModItemAttr, Options, process_ast, process_ast_update, process_gen, scan, update_mod_rs,
-};
-use anyhow::{Context, Result, anyhow};
+use crate::codegen::{ModItemAttr, Options, process_ast, process_ast_update, process_gen, scan, update_mod_rs, create_mod_rs_if_not_exists, sqlx_mapping_init};
+use anyhow::{Context, Result };
 use clap::Parser;
-use clap::{ArgAction};
+
 use regex::Regex;
 use sqlx::postgres::PgPoolOptions;
-use sqlx::{Pool, Postgres};
+use sqlx::{Error, Pool, Postgres};
 use std::path::{Path, PathBuf};
+use chrono::{TimeZone, Utc};
+use quote::{format_ident, ToTokens};
+use syn::{parse_quote, ItemStruct};
+
+#[derive(clap::Subcommand)]
+enum Command {
+
+    /// mapping command.
+    Map {
+        /// watch mode.
+        #[arg(short, long = "watch")]
+        w: bool,
+
+        /// mapping struct model.
+        #[arg(short, long = "model")]
+        m: bool,
+
+        /// mapping create sql function.
+        #[arg(short, long = "create")]
+        c: bool,
+
+        /// mapping retrieve sql function.
+        #[arg(short, long = "retrieve")]
+        r: bool,
+
+        /// mapping update sql function.
+        #[arg(short, long = "update" )]
+        u: bool,
+
+        /// mapping delete sql function.
+        #[arg(short, long = "delete")]
+        d: bool,
+
+        /// mapping all (create/retrieve/update/delete) sql function.
+        #[arg(long, )]
+        crud: bool,
+
+        /// specify DATABASE_URL. etc.: postgres://user:password@localhost/postgres
+        #[arg(long)]
+        db: Option<String>,
+
+
+        /// specify where to write.
+        #[arg(long, default_value = "src/model/pg")]
+        output: PathBuf,
+    },
+
+}
 
 #[derive(Parser)]
 #[command(name = "sm")]
 #[command(about = "Generate Rust structs and CRUD functions from PostgresSQL tables", long_about = None)]
 pub struct Cli {
-    #[arg(long)]
-    pub db: Option<String>,
 
-    #[arg(long, default_value = "src/models")]
-    pub output: PathBuf,
+    #[command(subcommand)]
+    cmd: Option<Command>,
 
-    // #[arg(long, action = ArgAction::SetTrue)]
-    // pub models: bool,
-    //
-    // #[arg(short = 'c', long, action = ArgAction::SetTrue)]
-    // pub create: bool,
-    //
-    // #[arg(short = 'r', long, action = ArgAction::SetTrue)]
-    // pub retrieve: bool,
-    //
-    // #[arg(short = 'u', long, action = ArgAction::SetTrue)]
-    // pub update: bool,
-    //
-    // #[arg(short = 'd', long, action = ArgAction::SetTrue)]
-    // pub delete: bool,
-    #[arg(long, action = ArgAction::SetTrue)]
-    pub crud: bool,
-    // #[arg(long)]
-    // pub config: Option<PathBuf>,
 }
 
 // const STYLES: styling::Styles = styling::Styles::styled()
@@ -45,73 +71,109 @@ pub struct Cli {
 //     .literal(styling::AnsiColor::Blue.on_default().bold())
 //     .placeholder(styling::AnsiColor::Cyan.on_default());
 
+use chrono_tz::Asia::Shanghai;
+
 pub async fn run() -> anyhow::Result<()> {
+
     let cli = Cli::parse();
 
-    let Cli { db, output, crud } = cli;
+    match cli.cmd {
+        Some(Command::Map {w,  m, c, r, u, d, crud, db, output }) => {
+            let db_url = &db
+                .or(std::env::var("DATABASE_URL").ok())
+                .context("env DATABASE_URL is required! ")?;
+            let options = Options {
+                mod_dir: output.clone(),
+                mod_file: output.clone().join("mod.rs"),
+                create: crud || c,
+                update: crud || u,
+                delete: crud || d,
+                retrieve: crud || r,
+                crud,
+                model: crud || c || u || d || r || m,
+            };
 
-    // let mut cmd = Cli::command();
-    // let style = cmd.color(clap::ColorChoice::Always).get_matches();
+            let pool = connect_db(db_url).await;
 
-    let db_url = &db
-        .or(std::env::var("DATABASE_URL").ok())
-        .context("env DATABASE_URL is required! ")?;
+            if crud || m || c || r || u || d {
+                let res = sqlx_mapping_init(&pool).await;
+                match res {
+                    Ok(_) => {}
+                    Err(e) => {println!("{:#?}", e); return Ok(())}
+                }
 
-    let pool = connect_db(db_url).await;
 
-    if !crud {
-        return Err(anyhow!("Please provide --crud option."));
-    }
+                let temp = res?;
+                tokio::fs::create_dir_all(&options.mod_dir).await?;
+                create_mod_rs_if_not_exists(&options.mod_file)
+                  .await
+                  .expect("Failed to create mod.rs");
+                 let ((mod_file,mod_mappings), all_tables, mut exist_files) = scan(&options, &pool, &temp).await?;
 
-    let options = Options {
-        mod_dir: output.clone(),
-        mod_file: output.clone().join("mod.rs"),
-    };
+                let mut in_file_tables = Vec::new();
+                let mut in_file_old_tables = Vec::new();
+                let mut rest_tables = Vec::new();
 
-    let ((mod_file, pg_class), all_tables, mut exist_files) = scan(&options, &pool).await?;
+                for (table_name, table_info) in all_tables {
+                    if mod_mappings.contains_key(&table_info.oid) {
+                        if exist_files.contains_key(&table_info.table_name) {
+                            let file_key = table_info.table_name.clone();
+                            in_file_tables.push((table_info, exist_files.remove(&file_key).unwrap()));
+                            continue;
+                        } else if exist_files.contains_key(&table_info.old_table_name) {
+                            let file_key = table_info.old_table_name.clone();
+                            in_file_old_tables.push((table_info, exist_files.remove(&file_key).unwrap()));
+                            continue;
+                        } else {
+                            // 在mod中有定义, 但是新旧表名都没匹配上
+                            continue;
+                        }
+                    }
+                    rest_tables.push(table_info);
+                }
 
-    let mut in_file_tables = Vec::new();
-    let mut in_file_old_tables = Vec::new();
-    let mut rest_tables = Vec::new();
+                tokio::join!(
+                        update_mod_rs(&options, mod_mappings, mod_file, &rest_tables, &temp),
+                        process_ast(&options, in_file_tables),
+                        process_ast_update(&options, in_file_old_tables),
+                        process_gen(&options, &rest_tables),
+                    );
 
-    for (table_name, table_info) in all_tables {
-        if pg_class.contains_key(&table_info.oid) {
-            if exist_files.contains_key(&table_name) {
-                in_file_tables.push((table_info, exist_files.remove(&table_name).unwrap()));
-                continue;
-            } else if exist_files.contains_key(&pg_class.get(&table_info.oid).unwrap().name) {
-                in_file_old_tables.push((table_info, exist_files.remove(&table_name).unwrap()));
-                continue;
-            } else {
-                // 在mod中有定义, 但是新旧表名都没匹配上
-                continue;
+                if crud {
+
+                    // tokio::join!(
+                    //     update_mod_rs(&options, mod_mappings, mod_file, &rest_tables, &temp),
+                    //     process_ast(&options, in_file_tables),
+                    //     process_ast_update(&options, in_file_old_tables),
+                    //     process_gen(&options, &rest_tables),
+                    // );
+
+                } else {
+                    if m {
+                        println!("rest tables: {:#?}",&rest_tables);
+                        // println!("mod_mappings: {:#?}",&mod_mappings);
+                        //
+                        // tokio::join!(
+                        //     update_mod_rs(&options, mod_mappings, mod_file, &rest_tables, &temp ),
+                        // );
+                        //
+                    }
+                    if c {}
+                    if r {}
+                    if u {}
+                    if d {}
+                }
             }
         }
-        rest_tables.push(table_info);
+        None => {
+            println!("no cmd passed")
+        }
     }
-
-    let mod_items = rest_tables
-        .iter()
-        .map(|t| ModItemAttr {
-            name: t.table_name.clone(),
-            table_name: t.table_name.clone(),
-            oid: t.oid,
-        })
-        .collect::<Vec<_>>();
-
-    tokio::join!(
-        update_mod_rs(&options, pg_class, mod_file, &mod_items),
-        process_ast(&options, in_file_tables),
-        process_ast_update(&options, in_file_old_tables),
-        process_gen(&options, rest_tables),
-    );
 
     Ok(())
 }
 
 pub fn report_error(err: &anyhow::Error) {
-    // let cmd = Cli::command();
-    // let styles = cmd.styles(STYLES).get_matches();
     println!("{} {}", "ERROR: ", err);
 }
 
@@ -183,31 +245,6 @@ async fn insert_or_replace_module(file_path: &Path, module_name: &str) -> Result
 
 #[cfg(test)]
 mod tests {
-    use crate::cli::{Cli, connect_db, insert_or_replace_module};
-    use anyhow::Context;
-    // use clap::error::ErrorKind;
-    use clap::{CommandFactory, Parser};
-    use std::path::Path;
 
-    #[tokio::test]
-    async fn test_generate_models() -> anyhow::Result<()> {
-        insert_or_replace_module(Path::new("src/main.rs"), "models").await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_generate_crud() -> anyhow::Result<()> {
-        let args = Cli::parse_from(["cx"]);
-        let mut cmd = Cli::command();
-        let style = cmd.color(clap::ColorChoice::Always).get_matches();
-
-        let db_url = &args
-            .db
-            .or(std::env::var("DATABASE_URL").ok())
-            .context("env DATABASE_URL is required! ")?;
-
-        let pool = connect_db(db_url).await;
-
-        Ok(())
-    }
 }
+

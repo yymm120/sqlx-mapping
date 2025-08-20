@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>✨ Creator-Sqlx ✨</h1>
+  <h1>✨ sqlx-mapping ✨</h1>
   <p>PostgreSQL to Rust Code Generator</p>
 
 [![Crates.io](https://img.shields.io/crates/v/creator-sqlx?style=for-the-badge&logo=rust)](https://crates.io/crates/creator-sqlx)
@@ -19,9 +19,6 @@
 
 ## 📦 Installation
 
-```bash
-
-```
 
 ```bash
 cargo install sqlx-mapping
@@ -33,7 +30,7 @@ cargo install sqlx-mapping
 # 1. Set connection (or use --db parameter)
 export DATABASE_URL="postgresql://user:password@localhost:5432/db_name"
 
-sqlx-mapping --crud
+sqlx-mapping map --output examples/model/pg --crud
 ```
 
 ## 📜 Command Reference
@@ -47,18 +44,4 @@ OPTIONS:
         --crud         Generate all simple CRUD operations (default)
 
         --db           postgresql://user:pass@localhost:5432/db_name
-```
-
-## 🎯 Example Output
-
-```rust
-// models/user.rs
-#[derive(Debug, sqlx::FromRow, serde::Serialize, serde::Deserialize)]
-pub struct User {
-    pub id: uuid::Uuid,
-    pub username: String,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
-}
 ```

@@ -12,6 +12,10 @@ use crate::cli::report_error;
 pub mod cli;
 pub mod codegen;
 pub mod config;
+mod watch;
+// mod model;
+
+
 
 #[tokio::main]
 async fn main() {
@@ -20,3 +24,4 @@ async fn main() {
         std::process::exit(1);
     }
 }
+
