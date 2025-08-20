@@ -178,7 +178,6 @@ pub fn report_error(err: &anyhow::Error) {
 }
 
 pub async fn connect_db(db_url: &str) -> Pool<Postgres> {
-    // let db_url = "postgres://postgres:postgres@localhost/paotui";
     PgPoolOptions::new()
         .max_connections(5)
         .connect(db_url)

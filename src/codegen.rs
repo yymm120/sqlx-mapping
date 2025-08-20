@@ -1867,7 +1867,6 @@ mod tests {
 
   #[tokio::test]
   async fn test_foreign() -> anyhow::Result<()> {
-    // let db_url = "postgres://postgres:postgres@localhost/paotui";
     //
     // let pool = PgPoolOptions::new()
     //   .max_connections(5)
