@@ -36,18 +36,27 @@ cargo install sqlx-mapping
 # 1. Set connection (or use --db parameter)
 export DATABASE_URL="postgresql://user:password@localhost:5432/db_name"
 
-sqlx-mapping map --output examples/model/pg -m
+sqlx-mapping map --output examples/model/pg --watch
+
+sqlx-mapping map --output examples/model/pg --watch -m
+
+sqlx-mapping map --output examples/model/pg --watch --crud
 ```
 
 ## 📜 Command Reference
 
 ```text
-USAGE:
-    cx [OPTIONS] [COMMAND]
+Usage: sm map [OPTIONS]
 
-OPTIONS:
-
-        --crud         Generate all simple CRUD operations 
-
-        --db           postgresql://user:pass@localhost:5432/db_name
+Options:
+  -w, --watch            watch mode
+  -m, --model            mapping struct model
+  -c, --create           mapping create sql function
+  -r, --retrieve         mapping retrieve sql function
+  -u, --update           mapping update sql function
+  -d, --delete           mapping delete sql function
+      --crud             mapping all (create/retrieve/update/delete) sql function
+      --db <DB>          specify DATABASE_URL. etc.: postgres://user:password@localhost/postgres
+      --output <OUTPUT>  specify where to write [default: src/model/pg]
+  -h, --help             Print help
 ```

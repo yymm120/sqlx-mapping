@@ -50,7 +50,7 @@ enum Command {
 
 
         /// specify where to write.
-        #[arg(long, default_value = "src/model/pg")]
+        #[arg(long, default_value = "examples/model/pg")]
         output: PathBuf,
     },
 

@@ -34,11 +34,11 @@ cargo install sqlx-mapping
 # 1. 设置连接 (或使用 --db 参数)
 export DATABASE_URL="postgresql://用户:密码@localhost:5432/数据库名"
 
-# 2. 生成模型
-cx --models
+sqlx-mapping map --output examples/model/pg --watch
 
-# 3. 生成CRUD (包含模型生成)
-cx --crud
+sqlx-mapping map --output examples/model/pg --watch -m
+
+sqlx-mapping map --output examples/model/pg --watch --crud
 ```
 
 ## 📜 命令参考
