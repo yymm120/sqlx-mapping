@@ -1,6 +1,6 @@
 [package]
 name = "sqlx-mapping"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 authors = ["allen<1208401731@qq.com>"]
 description = "A tool for automatically generating Rust structs and CRUD functions from PostgreSQL tables"
