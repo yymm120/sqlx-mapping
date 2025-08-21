@@ -1356,15 +1356,15 @@ pub async fn scan(
   HashMap<String, ParsedFile>,
 )> {
   let Options { mod_dir, mod_file, .. } = options;
-  if let (info_from_mod, Ok(mut info_from_db), Ok(info_from_file)) = tokio::join!(
+  let (info_from_mod, info_from_db, info_from_file) = tokio::join!(
         scan_mod_rs(mod_file, &pool, mappings),
         get_tables(&pool, mappings),
         read_all_files_async(mod_dir)
-    ) {
-    merge_info(&info_from_mod.1, &mut info_from_db);
-    return Ok((info_from_mod, info_from_db, info_from_file));
-  }
-  Err(anyhow!("Failed Scan files."))
+    );
+    let mut tables = info_from_db?;
+
+    merge_info(&info_from_mod.1, &mut tables);
+    Ok((info_from_mod, tables, info_from_file?))
 }
 
 
@@ -1469,150 +1469,65 @@ fn gen_items_if_not_exist(file: &mut File, options: &Options, table_info: &Table
   let mut last_gen = Vec::new();
   for attr in file.attrs.iter() {
     if let Meta::NameValue(MetaNameValue {value: Expr::Lit(ExprLit {lit: Lit::Str(str), ..}), ..}) = &attr.meta {
-      let token = str.to_token_stream().to_string().replace(" ", "").replace("\"", "");
-      last_gen = token.split(",").into_iter().map(|t| t.to_string()).collect::<Vec<String>>()
+      let token = str.to_token_stream().to_string().replace("\"", "").split("\n").map(|t| t.to_string()).collect::<Vec<_>>();
+      last_gen = token[0].replace("include:", "").replace(" ", "").split(",").into_iter().map(|t| t.to_string()).collect::<Vec<String>>()
     }
   }
   let Options { mod_dir, mod_file, create, update, delete, retrieve, crud, model, db_url } = options;
   let mut op = HashMap::new();
 
-  if last_gen.contains(&"model".to_string()) {
-    if !*model {
-      op.insert("m".into(), "delete".into());
-    }
-  }
-  if last_gen.contains(&"create".to_string()) {
-    if !*create {
-      op.insert("c".into(), "delete".into());
-    }
-  }
-
-  if last_gen.contains(&"retrieve".to_string()) {
-    if !*retrieve {
-      op.insert("r".into(), "delete".into());
-    }
-  }
-  if last_gen.contains(&"update".to_string()) {
-    if !*update {
-      op.insert("u".into(), "delete".into());
-    }
-  }
-  if last_gen.contains(&"delete".to_string()) {
-    if !*delete {
-      op.insert("d".into(), "delete".into());
-    }
-  }
   if *model {
-    if !last_gen.contains(&"model".to_string()) {
-      op.insert("m".into(), "create".into());
+
+    if !last_gen.contains(&"m".to_string()) {
+      let item = Item::Struct(generate_struct(table_info, &StructEnum::Stm));
+      file.items.push(item);
     }
   }
   if *create {
-    if !last_gen.contains(&"create".to_string()) {
-      op.insert("c".into(), "create".into());
+    if !last_gen.contains(&"c".to_string()) {
+      let item = Item::Struct(generate_struct(table_info, &StructEnum::Create));
+      file.items.push(item);
+      let item = Item::Fn(generate_insert_function(table_info));
+      file.items.push(item);
     }
   }
   if *retrieve {
-    if !last_gen.contains(&"retrieve".to_string()) {
-      op.insert("r".into(), "create".into());
+    if !last_gen.contains(&"Retrieve".to_string()) {
+      let mut item = generate_retrieve_functions(table_info);
+      match item {
+        Ok(items) => {
+          let mut items = items.into_iter().map(|tm| Item::Fn(tm)).collect::<Vec<_>>();
+          file.items.append(&mut items);
+        }
+        Err(e) => {
+          println!("{:#?}", e);
+        }
+      }
     }
   }
   if *update {
-    if !last_gen.contains(&"update".to_string()) {
-      op.insert("u".into(), "create".into());
+    if !last_gen.contains(&"Update".to_string()) {
+      let item = Item::Struct(generate_struct(table_info, &StructEnum::Update));
+      file.items.push(item);
+      let item = generate_update_function(table_info, SafeOp::IgnoreNone);
+      match item {
+        Ok(tm) => {file.items.push(Item::Fn(tm));}
+        Err(e) => {println!("{:#?}", e)}
+      }
+      let item = generate_update_function(table_info, SafeOp::AcceptNone);
+      match item {
+        Ok(tm) => {file.items.push(Item::Fn(tm));}
+        Err(e) => {println!("{:#?}", e)}
+      }
     }
   }
   if *delete {
-    if !last_gen.contains(&"delete".to_string()) {
-      op.insert("d".into(), "create".into());
+    if !last_gen.contains(&"Delete".to_string()) {
+      let item = generate_delete_function(table_info);
+      file.items.push(Item::Fn(item));
     }
   }
 
-
-  let mut di_s = Vec::new();
-  for (i, item) in file.items.iter_mut().enumerate() {
-    match item {
-      Item::Enum(tm) => {
-        let name = tm.ident.to_token_stream().to_string();
-        if name == "Col" && op.get("c").unwrap_or(&"".to_string()) == "delete" {
-          di_s.push(i);
-        }
-      }
-      Item::Fn(tm) => {
-        let name = tm.sig.ident.to_token_stream().to_string();
-        if name.starts_with("insert") && op.get("c").unwrap_or(&"".to_string()) == "delete" {
-          di_s.push(i);
-        }
-        if name.starts_with("update") && op.get("u").unwrap_or(&"".to_string()) == "delete" {
-          di_s.push(i);
-        }
-        if name.starts_with("retrieve") && op.get("r").unwrap_or(&"".to_string()) == "delete" {
-          di_s.push(i);
-        }
-        if name.starts_with("delete") && op.get("d").unwrap_or(&"".to_string()) == "delete" {
-          di_s.push(i);
-        }
-        if name.starts_with("model") && op.get("m").unwrap_or(&"".to_string()) == "delete" {
-          di_s.push(i);
-        }
-      }
-      Item::Struct(tm) => {
-        let name = tm.ident.to_token_stream().to_string();
-        if name.ends_with("ForCreate") && op.get("c").unwrap_or(&"".to_string()) == "delete" {
-          di_s.push(i);
-        }
-        if name.ends_with("ForUpdate") && op.get("u").unwrap_or(&"".to_string()) == "delete" {
-          di_s.push(i);
-        }
-
-        if name == table_info.table_name.to_pascal_case() && op.get("m").unwrap_or(&"".to_string()) == "delete" {
-          di_s.push(i);
-        }
-      }
-      _ => {}
-    }
-  }
-
-  if op.get("m").unwrap_or(&"".to_string()) == "create"  {
-    let item = Item::Struct(generate_struct(table_info, &StructEnum::Stm));
-    file.items.push(item);
-  }
-  if op.get("c").unwrap_or(&"".to_string()) == "create"  {
-    let item = Item::Struct(generate_struct(table_info, &StructEnum::Create));
-    file.items.push(item);
-    let item = Item::Fn(generate_insert_function(table_info));
-    file.items.push(item);
-  }
-  if op.get("r").unwrap_or(&"".to_string()) == "create"  {
-    let mut item = generate_retrieve_functions(table_info);
-    match item {
-      Ok(items) => {
-        let mut items = items.into_iter().map(|tm| Item::Fn(tm)).collect::<Vec<_>>();
-        file.items.append(&mut items);
-      }
-      Err(e) => {
-        println!("{:#?}", e);
-      }
-    }
-  }
-  if op.get("u").unwrap_or(&"".to_string()) == "create"  {
-    let item = Item::Struct(generate_struct(table_info, &StructEnum::Update));
-    file.items.push(item);
-    let item = generate_update_function(table_info, SafeOp::IgnoreNone);
-    match item {
-      Ok(tm) => {file.items.push(Item::Fn(tm));}
-      Err(e) => {println!("{:#?}", e)}
-    }
-    let item = generate_update_function(table_info, SafeOp::AcceptNone);
-    match item {
-      Ok(tm) => {file.items.push(Item::Fn(tm));}
-      Err(e) => {println!("{:#?}", e)}
-    }
-  }
-  if op.get("d").unwrap_or(&"".to_string()) == "create"  {
-    let item = generate_delete_function(table_info);
-    file.items.push(Item::Fn(item));
-  }
   op
 }
 
@@ -1697,24 +1612,24 @@ pub async fn gen_model_file(options: &Options, table: &TableInfo) -> anyhow::Res
   let Options { mod_dir,create, update, delete, retrieve, crud, model, .. } = options;
   let mut use_items: Vec<_> = generate_use_deps(options, &table);
 
-  let mut comment = String::new();
+  let mut comment = " include: ".to_string();
   if *crud {
-    comment.push_str("Model, Create, Retrieve, Update, Delete");
+    comment.push_str("m, c, r, u, d");
   } else {
     if *model {
-      comment.push_str("Model, ")
+      comment.push_str("m, ")
     }
     if *create {
-      comment.push_str("Create, ")
+      comment.push_str("c, ")
     }
     if *retrieve {
-      comment.push_str("Retrieve, ")
+      comment.push_str("r, ")
     }
     if *update {
-      comment.push_str("Update, ")
+      comment.push_str("u, ")
     }
     if *delete {
-      comment.push_str("Delete, ")
+      comment.push_str("d, ")
     }
   }
 
@@ -1801,7 +1716,7 @@ async fn read_all_files_async(dir_path: &PathBuf) -> anyhow::Result<HashMap<Stri
       .with_context(|| format!("Failed to read file: {:?}", path))?;
 
     let ast =
-      parse_file(&content).with_context(|| format!("Failed to parse file: {:?}", path))?;
+      parse_file(&content).with_context(|| format!("Failed to parse file: {:?}\nPlease check the doc comment if existing? it like //! include: in each file.", path))?;
 
     let parsed = ParsedFile {
       // oid: 0,

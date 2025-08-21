@@ -7,6 +7,7 @@ use regex::Regex;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Error, Pool, Postgres};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use chrono::{TimeZone, Utc};
 use quote::{format_ident, ToTokens};
 use syn::{parse_quote, ItemStruct};
@@ -98,6 +99,7 @@ pub async fn run() -> anyhow::Result<()> {
             let pool = connect_db(db_url).await;
 
             if w {
+
                 let mut stdout = io::stdout();
                 match crate::watch::run(&mut stdout, options.clone()).await {
                     Ok(status) => {
@@ -182,9 +184,10 @@ pub fn report_error(err: &anyhow::Error) {
 pub async fn connect_db(db_url: &str) -> Pool<Postgres> {
     PgPoolOptions::new()
         .max_connections(5)
+        .acquire_timeout(Duration::from_secs(3))
         .connect(db_url)
         .await
-        .expect("Can't connect to database")
+        .expect("connect to database occur error")
 }
 
 #[allow(unused)]
